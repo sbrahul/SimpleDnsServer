@@ -1,10 +1,10 @@
 # SimpleDnsServer
 
-A simple DNS server that supports A(IPv4)/AAAA(IPv6)/PTR(reverse lookup) queries.
+A simple DNS server that supports A (IPv4), AAAA (IPv6) and PTR (reverse lookup) queries.
 
 ## Installation
 
-A simple makefile is included in the project. Run the `make` command to compile. `make install` will install the executable in /usr/local/bin by default.
+A simple makefile is included in the project. Run the `make` command to compile. `make install` will install the executable in /usr/local/bin by default. For cross-compilation or custom compilers, set the environment variable CXX and CFLAGS with the required value.
 
 ```bash
 make           ## compile only
@@ -19,13 +19,14 @@ PREFIX=/home/asd/bin make install
 ## Usage
 
 ```
-SimpleDnsServer <-f entires_file> [-p port_num] [-v]
+SimpleDnsServer <-f entires_file> [-p port_num] [-d] [-v]
 ```
 
 | Option | Argument     | Description                                                            |
 |--------|--------------|------------------------------------------------------------------------|
 | f      | entries_file | Path to the entries file. Check Entries file section for more details. |
 | p      | port_num     | Port number on which to listen for requests. Default is port 53.       |
+| d      | -            | Daemonize the program. Logs get redireced to syslog.                   |
 | v      | -            | Verbose mode                                                           |
 
 _Example:_
@@ -48,5 +49,5 @@ somesite.org 2.3.4.5
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
 
 ## License
-Distributed under the MIT License. See LICENSE.txt for more information.
+Distributed under the MIT License. See LICENSE file for more information.
 

@@ -26,6 +26,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <sys/types.h>
+#include <syslog.h>
 #include <unistd.h>
 
 namespace
@@ -214,11 +215,40 @@ Query header format
     };
 
     bool _verb = false;
+    bool _daemon = false;
     using RawData = std::vector<uint8_t>;
     std::unordered_map<std::string, RawData> _dns_a_map; // v4
     std::unordered_map<std::string, RawData> _dns_aaaa_map; // v6
     std::unordered_map<std::string, RawData> _dns_ptr_map; // reverse lookup
 }
+
+#define Printer(pri, data...)   \
+{                               \
+    std::ostringstream ostr;    \
+    ostr << data;               \
+    PrintOut(pri, ostr.str());  \
+}
+
+#define PrintErrno(data...)                         \
+{                                                   \
+    std::ostringstream ostr;                        \
+    ostr << data << ": " << strerror(errno) << "\n";\
+    PrintOut(LOG_ERR, ostr.str());                  \
+}
+
+void PrintOut(int pri, const std::string& out)
+{
+    if (_daemon)
+    {
+        // GCC expects 2nd arg to be string literal
+        syslog(pri, "%s", out.c_str());
+    }
+    else
+    {
+        std::cout << out;
+    }
+}
+
 
 bool HandleATypeQuery(const std::string& name, struct BufSizePair& res, int type)
 {
@@ -246,8 +276,8 @@ bool HandleATypeQuery(const std::string& name, struct BufSizePair& res, int type
     }
     if (_verb)
     {
-        std::cout << "Unable to find address for type: " << type
-                  << ", name: " << name << "\n";
+        Printer(LOG_DEBUG, "Unable to find address for type: " << type
+                  << ", name: " << name << "\n");
     }
 
     return false;
@@ -260,7 +290,7 @@ bool HandlePtrQuery(const std::string& name, struct BufSizePair& res)
     {
         if (_verb)
         {
-            std::cout << "PTR lookup failed for " << name << "\n";
+            Printer(LOG_DEBUG, "PTR lookup failed for " << name << "\n");
         }
         return false;
     }
@@ -328,14 +358,14 @@ std::unique_ptr<uint8_t> ParseMsg(uint8_t* a_SourcePtr, int& ans_size)
     // Start with header
     struct DnsHeader head = *(struct DnsHeader *)ptr;
     head.NtoH();
-    // std::cout << head << "\n";
+    // Printer(LOG_DEBUG, head << "\n");
 
     // Check if its a query
     if (!head.IsQuery())
     {
         if (_verb)
         {
-            std::cout << "Not a query. Dropping msg:" << head.id << "\n";
+            Printer(LOG_DEBUG, "Not a query. Dropping msg:" << head.id << "\n");
         }
         return nullptr;
     }
@@ -345,7 +375,7 @@ std::unique_ptr<uint8_t> ParseMsg(uint8_t* a_SourcePtr, int& ans_size)
     {
         if (_verb)
         {
-            std::cout << "Single question query only!\n";
+            Printer(LOG_DEBUG, "Single question query only!\n");
         }
         return nullptr;
     }
@@ -355,7 +385,7 @@ std::unique_ptr<uint8_t> ParseMsg(uint8_t* a_SourcePtr, int& ans_size)
     auto host = ExtractHostname(ptr);
     if (_verb)
     {
-        std::cout << "Querying hostname: " << host << "\n";
+        Printer(LOG_DEBUG, "Querying hostname: " << host << "\n");
     }
 
     // ptr has been moved ahead of the name by ExtractHostname()
@@ -367,7 +397,7 @@ std::unique_ptr<uint8_t> ParseMsg(uint8_t* a_SourcePtr, int& ans_size)
     {
         if (_verb)
         {
-            std::cout << "Non Internet queries not supported " << query.qclass << "\n";
+            Printer(LOG_DEBUG, "Non Internet queries not supported " << query.qclass << "\n");
         }
         return nullptr;
     }
@@ -388,7 +418,7 @@ std::unique_ptr<uint8_t> ParseMsg(uint8_t* a_SourcePtr, int& ans_size)
     {
         if (_verb)
         {
-            std::cout << "Non A/AAAA/PTR queries not supported\n";
+            Printer(LOG_DEBUG, "Non A/AAAA/PTR queries not supported\n");
         }
         return nullptr;
     }
@@ -449,7 +479,7 @@ void Server(int servfd)
 
     if (_verb)
     {
-        std::cout << "Starting to listen on " << servfd << "\n";
+        Printer(LOG_DEBUG, "Starting to listen on " << servfd << "\n");
     }
 
     uint8_t buffer[500];
@@ -459,14 +489,14 @@ void Server(int servfd)
         int ret = select(servfd+1, &fds, NULL, NULL, NULL);
         if (ret < 1)
         {
-            perror("Select didnt return 1");
+            PrintErrno("Select didnt return 1");
             exit(1);
         }
 
         // check for our fd
         if (!FD_ISSET(servfd, &fds))
         {
-            std::cout << "fd not set!\n";
+            Printer(LOG_ERR, "fd not set!\n");
             exit(1);
         }
 
@@ -477,7 +507,7 @@ void Server(int servfd)
         int bytes = recvfrom(servfd, &buffer[0], sizeof buffer, 0, (struct sockaddr *)&saddr, &saddr_size);
         if (bytes < 1)
         {
-            perror("Failed to receive data");
+            PrintErrno("Failed to receive data");
             exit(1);
         }
 
@@ -486,7 +516,7 @@ void Server(int servfd)
             char client_ip[INET6_ADDRSTRLEN] = {0};
             if (inet_ntop(AF_INET6, &(saddr.sin6_addr), client_ip, sizeof(client_ip)) != NULL)
             {
-                std::cout << "Received message from: " << client_ip << "\n";
+                Printer(LOG_DEBUG, "Received message from: " << client_ip << "\n");
             }
         }
 
@@ -505,7 +535,7 @@ int CreateSocketAndBind(uint16_t port)
     int s = socket(AF_INET6, SOCK_DGRAM, 0);
     if (!s)
     {
-        perror("Unable to create socket");
+        PrintErrno("Unable to create socket");
         exit(1);
     }
 
@@ -522,17 +552,17 @@ int CreateSocketAndBind(uint16_t port)
 
     if (bind(s, (struct sockaddr *)&saddr, sizeof saddr) != 0)
     {
-        perror("Bind failed for port");
+        PrintErrno("Bind failed for port");
         if (errno == EACCES)
         {
-            std::cout << "If port number below 1024, then need root permissions\n";
+            Printer(LOG_ERR, "If port number below 1024, then need root permissions\n");
         }
         exit(1);
     }
 
     if (_verb)
     {
-        std::cout << "Socket " << s << " created for port " << port << "\n";
+        Printer(LOG_DEBUG, "Socket " << s << " created for port " << port << "\n");
     }
 
     return s;
@@ -559,14 +589,14 @@ std::string ReverseIp(const uint8_t *p, int af_type)
         char buf[INET_ADDRSTRLEN] = {0};
         if (inet_ntop(af_type, &v4, buf, sizeof(buf)) == NULL)
         {
-            std::cout << "Failed to reverse convert: 0x" << std::hex << v4 << "\n";
+            Printer(LOG_DEBUG, "Failed to reverse convert: 0x" << std::hex << v4 << "\n");
             return std::string();
         }
         std::string v4_s(buf);
         v4_s.append(".in-addr.arpa");
         if (_verb)
         {
-            std::cout << "RevIp = " << v4_s << "\n";
+            Printer(LOG_DEBUG, "RevIp = " << v4_s << "\n");
         }
         return v4_s;
     }
@@ -586,24 +616,13 @@ std::string ReverseIp(const uint8_t *p, int af_type)
     v6ip.append("ip6.arpa");
     if (_verb)
     {
-        std::cout << "RevIp = " << v6ip << "\n";
+        Printer(LOG_DEBUG, "RevIp = " << v6ip << "\n");
     }
     return v6ip;
 }
 
-void PopulateDnsMap(const std::string& confFile)
+void PopulateDnsMap(std::ifstream& ifs)
 {
-    std::ifstream ifs(confFile);
-    if (!ifs.is_open())
-    {
-        std::cout << "Failed to open file: " << confFile << "\n";
-        exit(1);
-    }
-
-    if (_verb)
-    {
-        std::cout << "Reading entires from file: " << confFile << "\n";
-    }
     std::string line, word, name, type, ip;
     while (std::getline(ifs, line))
     {
@@ -622,7 +641,7 @@ void PopulateDnsMap(const std::string& confFile)
         }
         if (words.size() != 2)
         {
-            std::cout << "Num of args wrong: " << line << "\n";
+            Printer(LOG_DEBUG, "Num of args wrong: " << line << "\n");
         }
         else
         {
@@ -630,7 +649,7 @@ void PopulateDnsMap(const std::string& confFile)
             ip = words[1];
             if (_verb)
             {
-                std::cout << "Name: " << name << ", IP: " << ip << "\n";
+                Printer(LOG_DEBUG, "Name: " << name << ", IP: " << ip << "\n");
             }
 
             struct addrinfo hints, *result;
@@ -641,7 +660,7 @@ void PopulateDnsMap(const std::string& confFile)
             int gres = getaddrinfo(ip.c_str(), NULL, &hints, &result);
             if (gres != 0)
             {
-                std::cout << "Error in parsing IP: " << ip << ", err: " << gai_strerror(gres) << "\n";
+                Printer(LOG_DEBUG, "Error in parsing IP: " << ip << ", err: " << gai_strerror(gres) << "\n");
                 continue;
             }
 
@@ -660,7 +679,7 @@ void PopulateDnsMap(const std::string& confFile)
                 }
                 else
                 {
-                    std::cout << "Insertion failed for: " << name << "\n";
+                    Printer(LOG_DEBUG, "Insertion failed for: " << name << "\n");
                     continue;
                 }
             }
@@ -676,7 +695,7 @@ void PopulateDnsMap(const std::string& confFile)
                 }
                 else
                 {
-                    std::cout << "Insertion failed for: " << name << "\n";
+                    Printer(LOG_DEBUG, "Insertion failed for: " << name << "\n");
                     continue;
                 }
             }
@@ -688,8 +707,22 @@ void PopulateDnsMap(const std::string& confFile)
 
     if (_verb)
     {
-        std::cout << "Finished parsing file\n\n";
+        Printer(LOG_DEBUG, "Finished parsing file\n");
     }
+}
+
+void Daemonize()
+{
+    if (-1 == daemon(0, 0))
+    {
+        PrintErrno("daemon() failed");
+        exit(1);
+    }
+    // Process can still get a controlling terminal since daemon() forks only
+    // once. Is it necessary to fork again for this application?
+
+    // Enable syslog
+    openlog("SimpleDnsServer", LOG_PID, LOG_DAEMON);
 }
 
 int main(int argc, char** argv)
@@ -699,12 +732,15 @@ int main(int argc, char** argv)
     uint32_t port = _DEF_DNS_PORT;
 
     int opt = 0;
-    while ((opt = getopt(argc, argv, "vp:f:")) != -1)
+    while ((opt = getopt(argc, argv, "vdp:f:")) != -1)
     {
         switch (opt)
         {
             case 'v':
                 _verb = true;
+                break;
+            case 'd':
+                _daemon = true;
                 break;
             case 'f':
                 file = optarg;
@@ -713,26 +749,42 @@ int main(int argc, char** argv)
                 port = strtoul(optarg, NULL, 10);
                 if (!port || (port > 65535))
                 {
-                    std::cout << "Port argument invalid/out of range: "
-                              << optarg << "\n";
+                    Printer(LOG_ERR, "Port argument invalid/out of range: "
+                              << optarg << "\n");
                     exit(1);
                 }
                 break;
             default:
-                std::cout << "Usage:\n" << argv[0]
-                          << " <-f conf_file> [-p port_num] [-v]\n";
+                Printer(LOG_ERR, "Usage:\n" << argv[0]
+                          << " <-f conf_file> [-p port_num] [-v]\n");
                 exit(1);
         }
     }
 
     if (!file)
     {
-        std::cout << "Must specify a entries file (-f option)\n";
+        Printer(LOG_ERR, "Must specify a entries file (-f option)\n");
         exit(1);
     }
 
+    std::ifstream ifs(file);
+    if (!ifs.is_open())
+    {
+        Printer(LOG_ERR, "Failed to open file: " << file << "\n");
+        exit(1);
+    }
+    if (_verb)
+    {
+        Printer(LOG_DEBUG, "Reading entires from file: " << file << "\n");
+    }
 
-    PopulateDnsMap(file);
+    if (_daemon)
+    {
+        Daemonize();
+    }
+
+    PopulateDnsMap(ifs);
+    ifs.close();
     int servfd = CreateSocketAndBind((uint16_t) port);
     Server(servfd);
     return 0;
